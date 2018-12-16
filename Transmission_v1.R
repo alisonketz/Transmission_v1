@@ -27,6 +27,7 @@ library(dplyr)
 library(tidyr)
 library(lattice)
 library(beepr)
+library(foreign)
 
 ###
 ### Load previous runs
@@ -49,6 +50,23 @@ levels(cwd.df$age) = c("","1","9+","9+","2","3","4-5","6-8","ADULT","0")
 cwd.df$kill_date=as.Date(cwd.df$kill_date)
 cwd.df=cwd.df[cwd.df$age!="ADULT",]
 cwd.df$age=as.factor(as.character(cwd.df$age))
+
+###
+### Restricing to the core area - should change to our study area eventually
+###
+
+core.df = read.dbf("~/Documents/Data/Core_Area/core_sections.dbf")
+names(core.df) = tolower(names(core.df))
+
+#creating unique section id's for all sections in the core area
+core.df$sectionid=do.call(paste, c(core.df[c("rng", "twp", "sec")], sep = "-"))
+length(unique(core.df$sectionid))
+cwd.df$sectionid=do.call(paste, c(cwd.df[c("range", "town", "sect")], sep = "-"))
+
+cwd.df = cwd.df[cwd.df$sectionid %in% core.df$sectionid,]
+
+#save dbf file
+write.dbf(core.df,file="~/Documents/Data/Core_Area/core_sections.dbf")
 
 #proportion of tested deer without results
 # table(cwd.df$has_results)[1]/sum(table(cwd.df$has_results)) #.0061
@@ -128,37 +146,31 @@ cwd.df$agemonths = as.integer(ceiling(cwd.df$agedays/(365.25/12)))
 
 # cwd.df[which(cwd.df$agemonths==min(cwd.df$agemonths)),]
 
-
-
 #eda of ages in months
 cwd.df$age.num[cwd.df$age.num==0]=0.5
 
-hist(cwd.df$age.num)
-boxplot(cwd.df$age.num)
-plot(cwd.df$age.num)
-summary(cwd.df$age.num)
+# hist(cwd.df$age.num)
+# boxplot(cwd.df$age.num)
+# plot(cwd.df$age.num)
 
+##########################################
 ###
 ### Format data for running in the model
 ###
+##########################################
 
-cwd.df = cwd.df %>% arrange(cwd.df$sect,cwd.df$age,cwd.df$kill_date)
+cwd.df = cwd.df %>% arrange(cwd.df$sectionid,cwd.df$age,cwd.df$kill_date)
 
 #constants for model
-N.sect = max(cwd.df$sect) #number of spatial units = 36 sections
-runsum.dat = c(0,cumsum(as.numeric(table(cwd.df$sect))))
+N.sect = length(unique(cwd.df$sectionid))
+N.sect
+runsum.dat = c(0,cumsum(as.numeric(table(cwd.df$sectionid))))
 agem.dat = cwd.df$agemonths
-
-class(cwd.df$agemonths)
-
-
 
 max(runsum.dat)
 agem.dat[dim(cwd.df)[1]]
 agem.dat[runsum.dat[N.sect+1]]
 max(agem.dat)
-
-
 
 ###
 ### simulation for indexing matrices gamma and dayhaz
@@ -177,17 +189,12 @@ for (i in 1:N.sect) {
   } #j
 } #i
 
-head(dayhaz)
-
 dayhaz.in=dayhaz
 gam.in = gam
 gam.in[!is.na(gam)]=NA
 gam.in[is.na(gam)]=0
 dayhaz.in[!is.na(dayhaz)]=NA
 dayhaz.in[is.na(dayhaz)]=0
-
-
-
 
 ##################################################################################################################################
 ###
@@ -207,8 +214,10 @@ dayhaz.in[is.na(dayhaz)]=0
 
 #Table 2 - overall intercept, nonspatial
 modelcode = nimbleCode({
-    beta0 ~ dflat()
-    for (i in 1:N) {
+
+      # beta0 ~ T(dnorm(-6,3),-9,-1)
+      beta0 ~ dflat()
+      for (i in 1:N) {
         for (j in (runsum[i]+1):runsum[i+1]) {
             for (k in 1:agem[j]) {
                 gamma[j,k]<-(beta0)
@@ -243,12 +252,12 @@ modelout<-nimbleModel(code= modelcode,
                       constants = nimConsts,
                       data = nimData,
                       inits = nimInits,
-                      check=FALSE,calculate=FALSE)
+                      calculate=FALSE)
 
 
 
 #number of MCMCr iterations, Chains, and Burn-in
-reps<-10000
+reps<-30000
 bin<-0.5*reps
 n.chains<-1
 
@@ -265,14 +274,17 @@ beep(sound=5)
 # out<-mcmc.list(lapply(mcmcout$samples, mcmc))
 out = mcmc(mcmcout)
 fit.sum=summary(mcmcout)
+fit.sum
 
-pdf("figures/param_plot_v6.pdf")
-densityplot(out[,"tau"],ylab="tau")
-traceplot(out[,"tau"],ylab="tau")
+pdf("intmodel_beta0.pdf")
 densityplot(out[,"beta0"],ylab="beta0")
 traceplot(out[,"beta0"],ylab="beta0")
 dev.off()
 
+plot(1-exp(-exp(out[,"beta0"])))
+
+
+save(out,file="out.Rdata")
 ##################################################################################################################################
 ###
 ### Spatial Models
